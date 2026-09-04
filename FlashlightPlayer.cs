@@ -53,6 +53,38 @@ namespace MinerHelmetFlashlight
 
             Vector2 flashlightPosition = GetFlashlightWorldPosition();
             ApplyDynamicLighting(flashlightPosition);
+            SpawnDust(flashlightPosition);
+        }
+
+        // ============================================================
+        // ПЫЛЬ, ПЛАВАЮЩАЯ В ЛУЧЕ
+        // ============================================================
+        // Формула halfWidth здесь намеренно совпадает с той, что используется
+        // в MinerHelmetFlashlight.GenerateBeamTexture(), чтобы пыль спавнилась
+        // ровно внутри видимой формы луча, а не поверх/мимо него.
+        private float _dustSpawnTimer;
+
+        private void SpawnDust(Vector2 flashlightPosition)
+        {
+            _dustSpawnTimer += 1f;
+            if (_dustSpawnTimer < 1f)
+                return;
+            _dustSpawnTimer = 0f;
+
+            float t = Main.rand.NextFloat(0.05f, 1f);
+            float dist = t * BeamLength;
+            float halfWidth = MathHelper.Lerp(3f, 64f, (float)Math.Pow(t, 0.85));
+
+            Vector2 perp = new Vector2(-BeamDirection.Y, BeamDirection.X);
+            float offset = Main.rand.NextFloat(-1f, 1f) * halfWidth;
+
+            Vector2 spawnPos = flashlightPosition + BeamDirection * dist + perp * offset;
+
+            int dustId = Dust.NewDust(spawnPos, 1, 1, ModContent.DustType<MinerDustParticle>(), 0f, 0f, 150, default, 1f);
+            Dust dust = Main.dust[dustId];
+            dust.noGravity = true;
+            dust.velocity = BeamDirection * Main.rand.NextFloat(0.15f, 0.4f);
+            dust.customData = BeamDirection;
         }
 
         // ============================================================
