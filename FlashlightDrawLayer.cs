@@ -25,7 +25,6 @@ namespace MinerHelmetFlashlight
             if (texture == null)
                 return;
 
-            // Используем позицию из FlashlightPlayer (которая берёт Player.headPosition)
             Vector2 flashlightWorldPos = modPlayer.GetFlashlightWorldPosition();
             Vector2 screenPos = flashlightWorldPos - Main.screenPosition;
 
@@ -35,11 +34,8 @@ namespace MinerHelmetFlashlight
             direction.Normalize();
 
             float rotation = direction.ToRotation() - MathHelper.PiOver2;
-
             float lengthScale = FlashlightPlayer.BeamLength / texture.Height;
-
             Vector2 origin = new Vector2(texture.Width / 2f, 0f);
-
             Color beamColor = new Color(255, 250, 220, 255);
 
             DrawData beamData = new DrawData(
