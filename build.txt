@@ -1,0 +1,9 @@
+displayName = Miner Helmet Flashlight
+author = YourName
+version = 1.0
+homepage = 
+description = Каска шахтёра теперь работает как настоящий фонарик: яркий направленный луч света, следующий за курсором.
+modReferences = 
+sortAfter = 
+sortBefore = 
+side = Client
