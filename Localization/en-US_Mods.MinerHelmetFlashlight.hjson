@@ -1,1 +1,25 @@
+Configs: {
+	FlashlightConfig: {
+		BeamLength: {
+			Label: Beam Length
+			Tooltip: ""
+		}
 
+		Headers: {
+			BeamSettings: Beam Settings Header
+			DustSettings: Dust Settings Header
+		}
+
+		DisplayName: Flashlight Config
+
+		LightIntensity: {
+			Label: Light Intensity
+			Tooltip: ""
+		}
+
+		DustFrequency: {
+			Label: Dust Frequency
+			Tooltip: ""
+		}
+	}
+}

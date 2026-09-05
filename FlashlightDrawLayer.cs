@@ -3,6 +3,7 @@ using Microsoft.Xna.Framework.Graphics;
 using Terraria;
 using Terraria.DataStructures;
 using Terraria.ModLoader;
+using Terraria.ModLoader.Config;
 
 namespace MinerHelmetFlashlight
 {
@@ -34,7 +35,11 @@ namespace MinerHelmetFlashlight
             direction.Normalize();
 
             float rotation = direction.ToRotation() - MathHelper.PiOver2;
-            float lengthScale = FlashlightPlayer.BeamLength / texture.Height;
+            
+            // БЕРЁМ ДЛИНУ ИЗ НАСТРОЕК
+            float beamLength = ModContent.GetInstance<FlashlightConfig>().BeamLength;
+            float lengthScale = beamLength / texture.Height;
+            
             Vector2 origin = new Vector2(texture.Width / 2f, 0f);
             Color beamColor = new Color(255, 250, 220, 255);
 

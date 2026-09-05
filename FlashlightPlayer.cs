@@ -2,35 +2,21 @@ using Microsoft.Xna.Framework;
 using Terraria;
 using Terraria.ID;
 using Terraria.ModLoader;
+using Terraria.ModLoader.Config;
 using System;
 
 namespace MinerHelmetFlashlight
 {
     public class FlashlightPlayer : ModPlayer
     {
-        public const float BeamLength = 900f;
         public Vector2 BeamDirection = Vector2.UnitX;
         public float HeadRotation = 0f;
 
-        // ============================================================
-        // НАСТРОЙКА ПОЛОЖЕНИЯ ФОНАРИКА
-        // ============================================================
         private const float FlashlightLocalX = 1f;
         private const float FlashlightLocalY = -4f;
 
-        // ============================================================
-        // ОТЛАДКА
-        // ============================================================
         private uint lastDebugFrame = 0;
-
-        // ============================================================
-        // ПЫЛЬ
-        // ============================================================
         private float _dustSpawnTimer;
-
-        // ============================================================
-        // ЗАЩИТА ОТ РЫВКОВ
-        // ============================================================
         private Vector2 _previousFlashlightPosition;
         private float _dashCooldown;
         private bool _isDashing;
@@ -39,6 +25,11 @@ namespace MinerHelmetFlashlight
             Player.armor[0] != null &&
             Player.armor[0].type == ItemID.MiningHelmet &&
             !Player.dead;
+
+        private FlashlightConfig GetConfig()
+        {
+            return ModContent.GetInstance<FlashlightConfig>();
+        }
 
         public override void PostUpdateMiscEffects()
         {
@@ -70,7 +61,6 @@ namespace MinerHelmetFlashlight
 
             Vector2 flashlightPosition = GetFlashlightWorldPosition();
 
-            // Обнаружение рывка
             if (_previousFlashlightPosition != Vector2.Zero)
             {
                 float movementDistance = Vector2.Distance(flashlightPosition, _previousFlashlightPosition);
@@ -91,41 +81,44 @@ namespace MinerHelmetFlashlight
                 _isDashing = false;
             }
 
-            // Освещение (только если не рывок)
             if (!_isDashing)
             {
                 ApplyDynamicLighting(flashlightPosition);
             }
 
-            // Пыль (спавнится всегда)
             SpawnDust(flashlightPosition);
 
-            // Отладка
             if (Main.GameUpdateCount - lastDebugFrame >= 60)
             {
+                /*
                 lastDebugFrame = Main.GameUpdateCount;
                 float degrees = HeadRotation * (180f / (float)Math.PI);
                 Main.NewText(
                     $"[Head] Угол: {degrees:F1}° | " +
                     $"Направление: {Player.direction} | " +
-                    $"BeamDirection: ({BeamDirection.X:F2}, {BeamDirection.Y:F2})",
+                    $"BeamDir: ({BeamDirection.X:F2}, {BeamDirection.Y:F2})",
                     255, 255, 0
                 );
+                */
             }
         }
 
-        // ============================================================
-        // ПЫЛЬ, ПЛАВАЮЩАЯ В ЛУЧЕ
-        // ============================================================
         private void SpawnDust(Vector2 flashlightPosition)
         {
+            FlashlightConfig config = GetConfig();
+            
             _dustSpawnTimer += 1f;
-            if (_dustSpawnTimer < 1f)
+            // ИСПРАВЛЕНИЕ 1: Чем больше DustFrequency, тем чаще спавн
+            // Делим 1f на DustFrequency: если DustFrequency = 2, спавним каждые 0.5 тика
+            float spawnInterval = 1f / config.DustFrequency;
+            
+            if (_dustSpawnTimer < spawnInterval)
                 return;
             _dustSpawnTimer = 0f;
 
+            float beamLength = config.BeamLength;
             float t = Main.rand.NextFloat(0.05f, 1f);
-            float dist = t * BeamLength;
+            float dist = t * beamLength;
             float halfWidth = MathHelper.Lerp(3f, 64f, (float)Math.Pow(t, 0.85));
 
             Vector2 perp = new Vector2(-BeamDirection.Y, BeamDirection.X);
@@ -140,18 +133,13 @@ namespace MinerHelmetFlashlight
             dust.customData = BeamDirection;
         }
 
-        // ============================================================
-        // ПОЛОЖЕНИЕ ГОЛОВЫ (С УЧЁТОМ МАУНТОВ)
-        // ============================================================
         public Vector2 GetHeadWorldPosition()
         {
-            // Приоритет: визуальная позиция головы
             if (Player.headPosition != Vector2.Zero)
             {
                 return Player.headPosition;
             }
 
-            // Если на маунте
             if (Player.mount.Active)
             {
                 Vector2 center = Player.MountedCenter;
@@ -162,7 +150,6 @@ namespace MinerHelmetFlashlight
                 return center + headOffset;
             }
 
-            // Запасной вариант
             Vector2 defaultCenter = Player.position + new Vector2(Player.width / 2f, Player.height / 2f);
             Vector2 defaultOffset = new Vector2(
                 Player.direction * 6f,
@@ -171,67 +158,55 @@ namespace MinerHelmetFlashlight
             return defaultCenter + defaultOffset;
         }
 
-        // ============================================================
-        // ПОЛОЖЕНИЕ ФОНАРИКА
-        // ============================================================
         public Vector2 GetFlashlightWorldPosition()
         {
             Vector2 headPos = GetHeadWorldPosition();
-            
-            // --------------------------------------------------------
-            // ЛОКАЛЬНАЯ СИСТЕМА КООРДИНАТ ФОНАРИКА
-            // --------------------------------------------------------
+
             float localX = FlashlightLocalX;
-            
+
             if (Player.direction < 0)
             {
                 localX = -localX;
             }
-            
-            // --------------------------------------------------------
-            // ПОВОРОТ ЛОКАЛЬНОГО СМЕЩЕНИЯ
-            // --------------------------------------------------------
+
             float cos = (float)Math.Cos(HeadRotation);
             float sin = (float)Math.Sin(HeadRotation);
-            
+
             float rotatedX = localX * cos - FlashlightLocalY * sin;
             float rotatedY = localX * sin + FlashlightLocalY * cos;
-            
-            // --------------------------------------------------------
-            // КОМПЕНСАЦИЯ ПРИ ВЗГЛЯДЕ ВВЕРХ (10° - 55°)
-            // --------------------------------------------------------
+
             float angleDegrees = HeadRotation * (180f / (float)Math.PI);
             float effectiveAngle = angleDegrees * Player.direction;
-            
-            // Если угол в диапазоне 10-55 градусов вверх
+
             if (effectiveAngle < -10f && effectiveAngle >= -55f)
             {
-                // Пропорциональная коррекция от 0 до 1
                 float correctionFactor = (Math.Abs(effectiveAngle) - 10f) / 45f;
-                
-                // Смещение для удержания луча на фонарике
-                // Инвертированные знаки
                 float offsetX = -correctionFactor * 5f * Player.direction;
-                float offsetY = correctionFactor * -5f; // Положительное = вниз
-                
+                float offsetY = correctionFactor * -5f;
+
                 rotatedX += offsetX;
                 rotatedY += offsetY;
             }
-            
+
             return headPos + new Vector2(rotatedX, rotatedY);
         }
 
-        // ============================================================
-        // ДИНАМИЧЕСКОЕ ОСВЕЩЕНИЕ
-        // ============================================================
         private void ApplyDynamicLighting(Vector2 flashlightPosition)
         {
+            FlashlightConfig config = GetConfig();
+            float beamLength = config.BeamLength;
+            float lightIntensity = config.LightIntensity;
+
             const int samples = 28;
             for (int i = 0; i <= samples; i++)
             {
                 float t = i / (float)samples;
-                Vector2 samplePos = flashlightPosition + BeamDirection * (BeamLength * t);
-                float intensity = MathHelper.Lerp(1.15f, 0.1f, t);
+                Vector2 samplePos = flashlightPosition + BeamDirection * (beamLength * t);
+                
+                // ИСПРАВЛЕНИЕ 2: lightIntensity теперь множитель, а не начальное значение
+                float baseIntensity = MathHelper.Lerp(1.15f, 0.1f, t);
+                float intensity = baseIntensity * lightIntensity;
+                
                 Lighting.AddLight(
                     samplePos,
                     1.0f * intensity,
