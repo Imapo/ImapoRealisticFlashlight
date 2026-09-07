@@ -2,7 +2,6 @@ using Microsoft.Xna.Framework;
 using Terraria;
 using Terraria.ID;
 using Terraria.ModLoader;
-using Terraria.ModLoader.Config;
 using System;
 
 namespace MinerHelmetFlashlight
@@ -11,26 +10,25 @@ namespace MinerHelmetFlashlight
     {
         public Vector2 BeamDirection = Vector2.UnitX;
         public float HeadRotation = 0f;
-        public float EffectiveBeamLength = 0f; // длина луча, обрезанная первым твёрдым блоком на пути
+        public float EffectiveBeamLength = 0f;
 
         private const float FlashlightLocalX = 1f;
         private const float FlashlightLocalY = -4f;
 
-        private uint lastDebugFrame = 0;
         private float _dustSpawnTimer;
         private Vector2 _previousFlashlightPosition;
         private float _dashCooldown;
         private bool _isDashing;
 
+        // Стандартные значения (вместо настроек)
+        private const float BeamLength = 900f;
+        private const float LightIntensity = 1.0f;
+        private const float DustFrequency = 1.0f;
+
         public bool HasFlashlight =>
             Player.armor[0] != null &&
             Player.armor[0].type == ItemID.MiningHelmet &&
             !Player.dead;
-
-        private FlashlightConfig GetConfig()
-        {
-            return ModContent.GetInstance<FlashlightConfig>();
-        }
 
         public override void PostUpdateMiscEffects()
         {
@@ -62,7 +60,7 @@ namespace MinerHelmetFlashlight
 
             Vector2 flashlightPosition = GetFlashlightWorldPosition();
 
-            EffectiveBeamLength = RaycastBeamLength(flashlightPosition, BeamDirection, GetConfig().BeamLength);
+            EffectiveBeamLength = RaycastBeamLength(flashlightPosition, BeamDirection, BeamLength);
 
             if (_previousFlashlightPosition != Vector2.Zero)
             {
@@ -90,31 +88,12 @@ namespace MinerHelmetFlashlight
             }
 
             SpawnDust(flashlightPosition);
-
-            if (Main.GameUpdateCount - lastDebugFrame >= 60)
-            {
-                /*
-                lastDebugFrame = Main.GameUpdateCount;
-                float degrees = HeadRotation * (180f / (float)Math.PI);
-                Main.NewText(
-                    $"[Head] Угол: {degrees:F1}° | " +
-                    $"Направление: {Player.direction} | " +
-                    $"BeamDir: ({BeamDirection.X:F2}, {BeamDirection.Y:F2})",
-                    255, 255, 0
-                );
-                */
-            }
         }
 
         private void SpawnDust(Vector2 flashlightPosition)
         {
-            FlashlightConfig config = GetConfig();
-            
             _dustSpawnTimer += 1f;
-            // ИСПРАВЛЕНИЕ 1: Чем больше DustFrequency, тем чаще спавн
-            // Делим 1f на DustFrequency: если DustFrequency = 2, спавним каждые 0.5 тика
-            float spawnInterval = 1f / config.DustFrequency;
-            
+            float spawnInterval = 1f / DustFrequency;
             if (_dustSpawnTimer < spawnInterval)
                 return;
             _dustSpawnTimer = 0f;
@@ -164,7 +143,6 @@ namespace MinerHelmetFlashlight
         public Vector2 GetFlashlightWorldPosition()
         {
             Vector2 headPos = GetHeadWorldPosition();
-
             float localX = FlashlightLocalX;
 
             if (Player.direction < 0)
@@ -194,45 +172,26 @@ namespace MinerHelmetFlashlight
             return headPos + new Vector2(rotatedX, rotatedY);
         }
 
-        /// <summary>
-        /// Тайл блокирует луч только если на нём есть активный полноценно твёрдый
-        /// блок. Платформы (tileSolidTop) и жидкость (вода/лава/мёд) НЕ блокируют —
-        /// у чистой жидкости нет активного тайла (HasTile == false), так что она
-        /// сюда даже не попадает.
-        /// </summary>
         private bool IsTileBlocking(int tileX, int tileY)
         {
             Tile tile = Main.tile[tileX, tileY];
             if (tile == null || !tile.HasTile)
                 return false;
 
-            // Явная защита: клетка с жидкостью никогда не блокирует луч,
-            // даже если по какой-то причине на ней есть активный тайл.
             if (tile.LiquidAmount > 0)
                 return false;
 
             return Main.tileSolid[tile.TileType] && !Main.tileSolidTop[tile.TileType];
         }
 
-        /// <summary>
-        /// Идёт вдоль луча шагом в полтайла, а на первом заблокированном шаге
-        /// уточняет точную точку столкновения бинарным поиском — без этого длина
-        /// луча теряла до 8px точности и всегда обрывалась с запасом внутрь блока,
-        /// вместо того чтобы доходить точно до его поверхности.
-        ///
-        /// К найденной точке столкновения добавляется небольшой нахлёст
-        /// (OverdrawDistance) — визуально луч должен слегка "впечататься" в блок,
-        /// а не останавливаться ровно на границе: мягкий край шейдера всё равно
-        /// съедает часть видимой длины, и без нахлёста это читалось как недолёт.
-        /// </summary>
-        private const float OverdrawDistance = 16f; // 1 тайл
+        private const float OverdrawDistance = 16f;
 
         private float RaycastBeamLength(Vector2 origin, Vector2 direction, float maxLength)
         {
             if (direction.LengthSquared() < 0.0001f)
                 return maxLength;
 
-            const float step = 8f; // пол-тайла — баланс точности и производительности
+            const float step = 8f;
             int steps = (int)(maxLength / step);
 
             float lastClearDist = 0f;
@@ -259,11 +218,6 @@ namespace MinerHelmetFlashlight
             return maxLength;
         }
 
-        /// <summary>
-        /// Бинарный поиск точной границы между последней свободной точкой и первой
-        /// заблокированной — 6 итераций дают точность около 0.1px при шаге 8px,
-        /// луч доходит вплотную к поверхности блока, а не останавливается заранее.
-        /// </summary>
         private float RefineHitDistance(Vector2 origin, Vector2 direction, float clearDist, float blockedDist)
         {
             for (int i = 0; i < 6; i++)
@@ -284,20 +238,15 @@ namespace MinerHelmetFlashlight
 
         private void ApplyDynamicLighting(Vector2 flashlightPosition)
         {
-            FlashlightConfig config = GetConfig();
             float beamLength = EffectiveBeamLength;
-            float lightIntensity = config.LightIntensity;
 
             const int samples = 28;
             for (int i = 0; i <= samples; i++)
             {
                 float t = i / (float)samples;
                 Vector2 samplePos = flashlightPosition + BeamDirection * (beamLength * t);
-                
-                // ИСПРАВЛЕНИЕ 2: lightIntensity теперь множитель, а не начальное значение
                 float baseIntensity = MathHelper.Lerp(1.15f, 0.1f, t);
-                float intensity = baseIntensity * lightIntensity;
-                
+                float intensity = baseIntensity * LightIntensity;
                 Lighting.AddLight(
                     samplePos,
                     1.0f * intensity,
