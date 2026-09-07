@@ -68,15 +68,17 @@ namespace MinerHelmetFlashlight
             Vector2 screenPos = flashlightWorldPos - Main.screenPosition;
             float rotation = direction.ToRotation() - MathHelper.PiOver2;
 
-            float beamLength = ModContent.GetInstance<FlashlightConfig>().BeamLength;
+            float beamLength = modPlayer.EffectiveBeamLength;
             const float maxWidth = 128f; // максимальная ширина конуса на дальнем конце, в пикселях
 
             var scale = new Vector2(maxWidth, beamLength);
             var origin = new Vector2(0.5f, 0f); // центр по ширине, у основания по длине (единицы текстуры 1x1)
 
             MiscShaderData shader = GameShaders.Misc["MinerHelmetFlashlight:Beam"];
-            shader.Shader.CurrentTechnique.Passes[0].Apply();
             shader.Shader.Parameters["uColor"].SetValue(new Vector3(1f, 0.98f, 0.86f));
+            shader.Shader.Parameters["uReferenceLength"].SetValue(ModContent.GetInstance<FlashlightConfig>().BeamLength);
+            shader.Shader.Parameters["uAbsoluteLength"].SetValue(beamLength);
+            shader.Shader.CurrentTechnique.Passes[0].Apply();
 
             // Внутри уже открытого нашего batch эффект должен быть привязан к
             // конкретному вызову Draw через смену текущего Effect графического

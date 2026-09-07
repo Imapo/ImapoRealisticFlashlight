@@ -11,6 +11,7 @@ namespace MinerHelmetFlashlight
     {
         public Vector2 BeamDirection = Vector2.UnitX;
         public float HeadRotation = 0f;
+        public float EffectiveBeamLength = 0f; // длина луча, обрезанная первым твёрдым блоком на пути
 
         private const float FlashlightLocalX = 1f;
         private const float FlashlightLocalY = -4f;
@@ -60,6 +61,8 @@ namespace MinerHelmetFlashlight
             BeamDirection = direction;
 
             Vector2 flashlightPosition = GetFlashlightWorldPosition();
+
+            EffectiveBeamLength = RaycastBeamLength(flashlightPosition, BeamDirection, GetConfig().BeamLength);
 
             if (_previousFlashlightPosition != Vector2.Zero)
             {
@@ -116,7 +119,7 @@ namespace MinerHelmetFlashlight
                 return;
             _dustSpawnTimer = 0f;
 
-            float beamLength = config.BeamLength;
+            float beamLength = EffectiveBeamLength;
             float t = Main.rand.NextFloat(0.05f, 1f);
             float dist = t * beamLength;
             float halfWidth = MathHelper.Lerp(3f, 64f, (float)Math.Pow(t, 0.85));
@@ -191,10 +194,98 @@ namespace MinerHelmetFlashlight
             return headPos + new Vector2(rotatedX, rotatedY);
         }
 
+        /// <summary>
+        /// Тайл блокирует луч только если на нём есть активный полноценно твёрдый
+        /// блок. Платформы (tileSolidTop) и жидкость (вода/лава/мёд) НЕ блокируют —
+        /// у чистой жидкости нет активного тайла (HasTile == false), так что она
+        /// сюда даже не попадает.
+        /// </summary>
+        private bool IsTileBlocking(int tileX, int tileY)
+        {
+            Tile tile = Main.tile[tileX, tileY];
+            if (tile == null || !tile.HasTile)
+                return false;
+
+            // Явная защита: клетка с жидкостью никогда не блокирует луч,
+            // даже если по какой-то причине на ней есть активный тайл.
+            if (tile.LiquidAmount > 0)
+                return false;
+
+            return Main.tileSolid[tile.TileType] && !Main.tileSolidTop[tile.TileType];
+        }
+
+        /// <summary>
+        /// Идёт вдоль луча шагом в полтайла, а на первом заблокированном шаге
+        /// уточняет точную точку столкновения бинарным поиском — без этого длина
+        /// луча теряла до 8px точности и всегда обрывалась с запасом внутрь блока,
+        /// вместо того чтобы доходить точно до его поверхности.
+        ///
+        /// К найденной точке столкновения добавляется небольшой нахлёст
+        /// (OverdrawDistance) — визуально луч должен слегка "впечататься" в блок,
+        /// а не останавливаться ровно на границе: мягкий край шейдера всё равно
+        /// съедает часть видимой длины, и без нахлёста это читалось как недолёт.
+        /// </summary>
+        private const float OverdrawDistance = 16f; // 1 тайл
+
+        private float RaycastBeamLength(Vector2 origin, Vector2 direction, float maxLength)
+        {
+            if (direction.LengthSquared() < 0.0001f)
+                return maxLength;
+
+            const float step = 8f; // пол-тайла — баланс точности и производительности
+            int steps = (int)(maxLength / step);
+
+            float lastClearDist = 0f;
+
+            for (int i = 1; i <= steps; i++)
+            {
+                float dist = i * step;
+                Vector2 samplePos = origin + direction * dist;
+                int tileX = (int)(samplePos.X / 16f);
+                int tileY = (int)(samplePos.Y / 16f);
+
+                if (!WorldGen.InWorld(tileX, tileY, 1))
+                    return lastClearDist;
+
+                if (IsTileBlocking(tileX, tileY))
+                {
+                    float hitDist = RefineHitDistance(origin, direction, lastClearDist, dist);
+                    return Math.Min(hitDist + OverdrawDistance, maxLength);
+                }
+
+                lastClearDist = dist;
+            }
+
+            return maxLength;
+        }
+
+        /// <summary>
+        /// Бинарный поиск точной границы между последней свободной точкой и первой
+        /// заблокированной — 6 итераций дают точность около 0.1px при шаге 8px,
+        /// луч доходит вплотную к поверхности блока, а не останавливается заранее.
+        /// </summary>
+        private float RefineHitDistance(Vector2 origin, Vector2 direction, float clearDist, float blockedDist)
+        {
+            for (int i = 0; i < 6; i++)
+            {
+                float mid = (clearDist + blockedDist) * 0.5f;
+                Vector2 samplePos = origin + direction * mid;
+                int tileX = (int)(samplePos.X / 16f);
+                int tileY = (int)(samplePos.Y / 16f);
+
+                if (IsTileBlocking(tileX, tileY))
+                    blockedDist = mid;
+                else
+                    clearDist = mid;
+            }
+
+            return clearDist;
+        }
+
         private void ApplyDynamicLighting(Vector2 flashlightPosition)
         {
             FlashlightConfig config = GetConfig();
-            float beamLength = config.BeamLength;
+            float beamLength = EffectiveBeamLength;
             float lightIntensity = config.LightIntensity;
 
             const int samples = 28;
