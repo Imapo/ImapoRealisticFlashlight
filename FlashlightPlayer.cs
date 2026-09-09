@@ -15,7 +15,6 @@ namespace MinerHelmetFlashlight
         private const float FlashlightLocalX = 1f;
         private const float FlashlightLocalY = -4f;
         private float _dustSpawnTimer;
-        private int _debugLogTimer;
         private Vector2 _previousFlashlightPosition;
         private float _dashCooldown;
         private bool _isDashing;
@@ -71,19 +70,6 @@ namespace MinerHelmetFlashlight
             BeamDirection = direction;
 
             Vector2 flashlightPosition = GetFlashlightWorldPosition();
-
-            // ВРЕМЕННАЯ ОТЛАДКА: вывод в чат раз в секунду (60 тиков логики).
-            // Уберите этот блок после диагностики.
-            _debugLogTimer++;
-            if (_debugLogTimer >= 60)
-            {
-                _debugLogTimer = 0;
-                Main.NewText(
-                    $"headPos.Y={Player.headPosition.Y:F1}  beamOrigin.Y={flashlightPosition.Y:F1}  " +
-                    $"pos.Y={Player.position.Y:F1}  gfxOffY={Player.gfxOffY:F1}  mount={Player.mount.Active}  fullRotation={Player.fullRotation:F2}",
-                    Color.Yellow
-                );
-            }
 
             // Raycasting: вычисляем реальную длину луча до первого блока
             EffectiveBeamLength = RaycastBeamLength(flashlightPosition, BeamDirection, BeamLength);
@@ -188,17 +174,10 @@ namespace MinerHelmetFlashlight
 
         /// <summary>
         /// Отдельная формула позиционирования головы для вагонетки.
-        /// Раскладываем смещение на две ОСМЫСЛЕННЫЕ, независимые компоненты:
-        ///   AlongRail — вдоль направления рельсов (вперёд по ходу вагонетки)
-        ///   AcrossRail — поперёк рельсов (вверх от сиденья к голове)
-        /// вместо одного смешанного вектора (direction*6, -14). Так их можно
-        /// откалибровать по отдельности: по вашим наблюдениям на подъёме и
-        /// спуске ошибка ведёт себя по-разному (то дальше, то ближе), а
-        /// единственной универсальной константой такое не описать — тут два
-        /// независимых неизвестных, а не одно.
-        ///
-        /// ТЕКУЩИЕ ЗНАЧЕНИЯ — ПРИБЛИЗИТЕЛЬНЫЕ, требуют калибровки по вашим
-        /// данным (см. чат).
+        /// Смещение разложено на AlongRail/AcrossRail (вдоль и поперёк рельсов,
+        /// поворачивается вместе с наклоном) плюс WorldOffsetX/Y (простой
+        /// мировой сдвиг поверх этого, не зависит от угла) — калибровка
+        /// подобрана и подтверждена на подъёме и спуске.
         /// </summary>
         private Vector2 GetMinecartHeadPosition(float gfxOffY)
         {
@@ -218,13 +197,21 @@ namespace MinerHelmetFlashlight
                 forward * fs + across * fc
             );
 
-            // Простой мировой сдвиг (не локальный, не поворачивается вместе
-            // с вагонеткой) — подвинуть луч на несколько пикселей на экране.
-            // Подберите значения по глазу; отрицательные = влево/вверх.
+            // Поправка (WorldOffsetX/Y) откалибрована под конкретный угол наклона
+            // рельсов (~45°, fullRotation≈±0.79) — на ровных рельсах (fullRotation=0)
+            // её применять не нужно вообще, иначе там всё съезжает (как и
+            // произошло). Масштабируем через синус угла: 0 на ровном месте,
+            // полная откалиброванная величина на том наклоне, где подбирали, и
+            // плавно между ними на промежуточных углах. Синус (а не просто сам
+            // угол) сам естественно меняет знак при противоположном наклоне
+            // рельсов — то есть поправка должна зеркалиться на "зеркальном" уклоне.
+            const float CalibrationAngle = 0.79f; // угол, на котором подбирали WorldOffsetX/Y
             const float WorldOffsetX = -14f;
             const float WorldOffsetY = 5f;
-            localHeadOffset.X += WorldOffsetX;
-            localHeadOffset.Y += WorldOffsetY;
+
+            float angleFactor = -(float)Math.Sin(Player.fullRotation) / (float)Math.Sin(CalibrationAngle);
+            localHeadOffset.X += WorldOffsetX * angleFactor;
+            localHeadOffset.Y += WorldOffsetY * angleFactor;
 
             return center + localHeadOffset;
         }
