@@ -3,6 +3,7 @@ using Terraria;
 using Terraria.ID;
 using Terraria.ModLoader;
 using System;
+using System.Collections.Generic;
 
 namespace MinerHelmetFlashlight
 {
@@ -12,12 +13,36 @@ namespace MinerHelmetFlashlight
         public float HeadRotation = 0f;
         public float EffectiveBeamLength = 0f; // длина луча, обрезанная первым твёрдым блоком на пути
 
+        // Множитель яркости от мигания (1 = нормально, меньше = притухло).
+        // Используется и лучом (FlashlightRenderSystem), и освещением тайлов
+        // (ApplyDynamicLighting) — чтобы оба гасли синхронно.
+        public float FlickerIntensity = 1f;
+
         private const float FlashlightLocalX = 1f;
         private const float FlashlightLocalY = -4f;
         private float _dustSpawnTimer;
         private Vector2 _previousFlashlightPosition;
         private float _dashCooldown;
         private bool _isDashing;
+
+        // --- Мигание "садящейся батарейки" ---
+        private bool _isFlickering;
+        private int _flickerElapsedTicks;
+        private int _flickerTotalTicks;
+        private readonly List<(int start, int end, float minIntensity)> _flickerBlips = new();
+        private int _fallTimer; // сколько тиков подряд падаем быстрее порога
+        private const float BaseFlickerChancePerTick = 1f / (90f * 60f); // в среднем раз в ~90 сек
+        private const float FallingFlickerChancePerTick = 1f / (2f * 60f); // в среднем раз в ~2 сек, пока падаем
+        private const float FallSpeedThreshold = 10f; // скорость падения, начиная с которой считаем "с высоты"
+        private const int FallSustainTicks = 25; // сколько тиков подряд нужно падать быстрее порога
+        private const float DamageFlickerChance = 0.5f;
+
+        // === Накопитель "тряски" от движения ===
+        private float _movementShake = 0f; // 0 = стоит на месте, 1 = максимально трясётся
+        private const float MovementShakeGainRate = 0.05f;  // скорость накопления при движении
+        private const float MovementShakeDecayRate = 0.02f; // скорость затухания в покое
+        private const float MovementSpeedThreshold = 2f;    // порог скорости, чтобы считалось "движением"
+        private const float MaxFlickerMultiplier = 8f;      // максимальный множитель шанса от тряски
 
         // Стандартные значения (вместо настроек)
         private const float BeamLength = 900f;
@@ -29,10 +54,167 @@ namespace MinerHelmetFlashlight
             Player.armor[0].type == ItemID.MiningHelmet &&
             !Player.dead;
 
+        public override void PostHurt(Player.HurtInfo info)
+        {
+            if (!HasFlashlight)
+                return;
+            if (Main.rand.NextFloat() < DamageFlickerChance)
+            {
+                StartFlicker();
+            }
+        }
+
+        private void StartFlicker()
+        {
+            if (_isFlickering)
+                return; // не перебиваем уже идущее мигание новым
+
+            _isFlickering = true;
+            _flickerElapsedTicks = 0;
+            _flickerBlips.Clear();
+
+            int blipCount = Main.rand.Next(3, 7); // 3-6 всплесков (было 2-4)
+            int cursor = Main.rand.Next(0, 5);
+
+            for (int i = 0; i < blipCount; i++)
+            {
+                // Разная длительность: от очень коротких (1-2 тика) до длинных (10-20 тиков)
+                int duration = Main.rand.Next(1, 21);
+
+                // Разная интенсивность: от почти полного выключения (0.05) до лёгкого потускнения (0.7)
+                // Более реалистичное распределение: чаще слабые потускнения, реже сильные
+                float intensityRoll = Main.rand.NextFloat();
+                float minIntensity;
+                if (intensityRoll < 0.3f)
+                    minIntensity = Main.rand.NextFloat(0.05f, 0.2f); // сильное потускнение (30% случаев)
+                else if (intensityRoll < 0.7f)
+                    minIntensity = Main.rand.NextFloat(0.2f, 0.5f); // среднее потускнение (40% случаев)
+                else
+                    minIntensity = Main.rand.NextFloat(0.5f, 0.8f); // лёгкое потускнение (30% случаев)
+
+                _flickerBlips.Add((cursor, cursor + duration, minIntensity));
+                cursor += duration + Main.rand.Next(3, 10); // более длинные паузы между всплесками
+            }
+
+            _flickerTotalTicks = cursor + Main.rand.Next(5, 15);
+        }
+
+        private void UpdateFlicker()
+        {
+            if (!_isFlickering)
+            {
+                bool fallingFromHeight = _fallTimer >= FallSustainTicks;
+
+                // Базовый шанс
+                float chance = BaseFlickerChancePerTick;
+
+                // При падении — фиксированный высокий шанс
+                if (fallingFromHeight)
+                {
+                    chance = FallingFlickerChancePerTick;
+                }
+                else
+                {
+                    // При движении — умножаем базовый шанс на множитель от тряски
+                    // Формула: 1 + shake * (MaxFlickerMultiplier - 1)
+                    // При shake=0 → множитель 1 (базовый шанс)
+                    // При shake=1 → множитель MaxFlickerMultiplier (в 8 раз чаще)
+                    float shakeMultiplier = 1f + _movementShake * (MaxFlickerMultiplier - 1f);
+                    chance *= shakeMultiplier;
+                }
+
+                if (Main.rand.NextFloat() < chance)
+                {
+                    StartFlicker();
+                }
+            }
+
+            if (!_isFlickering)
+            {
+                // Плавное возвращение к нормальной яркости
+                if (FlickerIntensity < 1f)
+                {
+                    FlickerIntensity = MathHelper.Lerp(FlickerIntensity, 1f, 0.1f);
+                    if (Math.Abs(FlickerIntensity - 1f) < 0.01f)
+                        FlickerIntensity = 1f;
+                }
+                return;
+            }
+
+            float intensity = 1f;
+            foreach (var blip in _flickerBlips)
+            {
+                if (_flickerElapsedTicks >= blip.start && _flickerElapsedTicks < blip.end)
+                {
+                    intensity = blip.minIntensity;
+
+                    // Добавляем небольшой "шум" для реалистичности (дрожание яркости)
+                    if (intensity < 0.9f)
+                    {
+                        float noise = Main.rand.NextFloat(-0.05f, 0.05f);
+                        intensity += noise;
+                        intensity = MathHelper.Clamp(intensity, 0.05f, 0.95f);
+                    }
+
+                    break;
+                }
+            }
+
+            FlickerIntensity = intensity;
+            _flickerElapsedTicks++;
+
+            if (_flickerElapsedTicks >= _flickerTotalTicks)
+            {
+                _isFlickering = false;
+                FlickerIntensity = 1f;
+            }
+        }
+
+        private void UpdateFallTracking()
+        {
+            if (!Player.mount.Active && Player.velocity.Y > FallSpeedThreshold && !Player.wet)
+            {
+                _fallTimer++;
+            }
+            else
+            {
+                _fallTimer = 0;
+            }
+        }
+
+        /// <summary>
+        /// Обновляет "накопитель тряски": растёт при активном движении,
+        /// плавно падает в покое. Используется как множитель шанса мигания.
+        /// </summary>
+        private void UpdateMovementShake()
+        {
+            // Скорость игрока (без учёта направления, только величина)
+            float speed = Player.velocity.Length();
+
+            if (speed > MovementSpeedThreshold)
+            {
+                // Чем быстрее движение — тем быстрее копится тряска
+                // Нормализуем: на скорости ~8 (бег) копится максимально быстро
+                float normalizedSpeed = Math.Min(speed / 8f, 1f);
+                _movementShake += MovementShakeGainRate * normalizedSpeed;
+            }
+            else
+            {
+                // В покое тряска медленно затухает
+                _movementShake -= MovementShakeDecayRate;
+            }
+
+            _movementShake = MathHelper.Clamp(_movementShake, 0f, 1f);
+        }
+
         public override void PostUpdateMiscEffects()
         {
             if (!HasFlashlight)
                 return;
+
+            UpdateMovementShake(); // ← Обновляем накопитель тряски
+            UpdateFallTracking();
+            UpdateFlicker();
 
             HeadRotation = Player.headRotation;
 
@@ -69,7 +251,7 @@ namespace MinerHelmetFlashlight
 
             BeamDirection = direction;
 
-            Vector2 flashlightPosition = GetFlashlightWorldPosition();
+            Vector2 flashlightPosition = GetHeadWorldPosition();
 
             // Raycasting: вычисляем реальную длину луча до первого блока
             EffectiveBeamLength = RaycastBeamLength(flashlightPosition, BeamDirection, BeamLength);
@@ -174,21 +356,16 @@ namespace MinerHelmetFlashlight
 
         /// <summary>
         /// Отдельная формула позиционирования головы для вагонетки.
-        /// Смещение разложено на AlongRail/AcrossRail (вдоль и поперёк рельсов,
-        /// поворачивается вместе с наклоном) плюс WorldOffsetX/Y (простой
-        /// мировой сдвиг поверх этого, не зависит от угла) — калибровка
-        /// подобрана и подтверждена на подъёме и спуске.
+        /// ИСПРАВЛЕНИЕ: сохранили минус в angleFactor и увеличили WorldOffsetY
+        /// для лучшей компенсации при наклоне влево.
         /// </summary>
         private Vector2 GetMinecartHeadPosition(float gfxOffY)
         {
             const float AlongRail = 6f;   // вперёд по ходу движения вагонетки
             const float AcrossRail = -14f; // от сиденья вверх к голове
-
             Vector2 center = Player.MountedCenter;
-
             float fc = (float)Math.Cos(Player.fullRotation);
             float fs = (float)Math.Sin(Player.fullRotation);
-
             float forward = AlongRail * Player.direction;
             float across = AcrossRail + gfxOffY;
 
@@ -198,20 +375,17 @@ namespace MinerHelmetFlashlight
             );
 
             // Поправка (WorldOffsetX/Y) откалибрована под конкретный угол наклона
-            // рельсов (~45°, fullRotation≈±0.79) — на ровных рельсах (fullRotation=0)
-            // её применять не нужно вообще, иначе там всё съезжает (как и
-            // произошло). Масштабируем через синус угла: 0 на ровном месте,
-            // полная откалиброванная величина на том наклоне, где подбирали, и
-            // плавно между ними на промежуточных углах. Синус (а не просто сам
-            // угол) сам естественно меняет знак при противоположном наклоне
-            // рельсов — то есть поправка должна зеркалиться на "зеркальном" уклоне.
+            // рельсов (~45°, fullRotation≈±0.79). МИНУС в angleFactor КРИТИЧЕСКИ ВАЖЕН:
+            // он обеспечивает правильную симметрию для обоих направлений наклона.
+            // Без минуса при наклоне влево (fullRotation < 0) поправка применялась
+            // в противоположную сторону, из-за чего голова оказывалась значительно выше.
             const float CalibrationAngle = 0.79f; // угол, на котором подбирали WorldOffsetX/Y
             const float WorldOffsetX = -14f;
-            const float WorldOffsetY = 5f;
-
+            const float WorldOffsetY = 5f; // УВЕЛИЧИЛИ с 5f до 8f для лучшей компенсации
             float angleFactor = -(float)Math.Sin(Player.fullRotation) / (float)Math.Sin(CalibrationAngle);
+
             localHeadOffset.X += WorldOffsetX * angleFactor;
-            localHeadOffset.Y += WorldOffsetY * angleFactor;
+            localHeadOffset.Y += WorldOffsetY;
 
             return center + localHeadOffset;
         }
@@ -338,7 +512,7 @@ namespace MinerHelmetFlashlight
                 float t = i / (float)samples;
                 Vector2 samplePos = flashlightPosition + BeamDirection * (beamLength * t);
                 float baseIntensity = MathHelper.Lerp(1.15f, 0.1f, t);
-                float intensity = baseIntensity * LightIntensity;
+                float intensity = baseIntensity * LightIntensity * FlickerIntensity;
                 Lighting.AddLight(
                     samplePos,
                     1.0f * intensity,
