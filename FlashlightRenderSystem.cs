@@ -10,7 +10,13 @@ namespace MinerHelmetFlashlight
     {
         public override void PostDrawTiles()
         {
-            if (Main.gameMenu)
+            // При открытой полноэкранной карте (клавиша M) Terraria переключается
+            // на другой путь отрисовки (иконки карты вместо обычной сцены), и
+            // Main.GameViewMatrix/Main.screenPosition в этот момент не соответствуют
+            // обычной игровой камере — из-за этого луч "улетал" в угол экрана.
+            // Рисовать его при открытой карте всё равно не имеет смысла — сцена
+            // и так не видна.
+            if (Main.gameMenu || Main.mapFullscreen)
                 return;
 
             SpriteBatch sb = Main.spriteBatch;
@@ -61,7 +67,8 @@ namespace MinerHelmetFlashlight
             var origin = new Vector2(0.5f, 0f);
 
             MiscShaderData shader = GameShaders.Misc["MinerHelmetFlashlight:Beam"];
-            shader.Shader.Parameters["uColor"].SetValue(new Vector3(1f, 0.98f, 0.86f));
+            Vector3 configColor = ModContent.GetInstance<FlashlightConfig>().LightColor;
+            shader.Shader.Parameters["uColor"].SetValue(configColor * modPlayer.FlickerIntensity);
             shader.Shader.Parameters["uReferenceLength"].SetValue(900f);
             shader.Shader.Parameters["uAbsoluteLength"].SetValue(beamLength);
             shader.Shader.CurrentTechnique.Passes[0].Apply();

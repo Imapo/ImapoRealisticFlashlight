@@ -49,10 +49,42 @@ namespace MinerHelmetFlashlight
         private const float LightIntensity = 1.0f;
         private const float DustFrequency = 1.0f;
 
-        public bool HasFlashlight =>
-            Player.armor[0] != null &&
-            Player.armor[0].type == ItemID.MiningHelmet &&
-            !Player.dead;
+        public bool HasFlashlight
+        {
+            get
+            {
+                // 1. Сначала проверяем слоты аксессуаров (3-9)
+                // Если каска там — она всегда видна, свет есть
+                for (int i = 3; i < Player.armor.Length; i++)
+                {
+                    if (Player.armor[i] != null && Player.armor[i].type == ItemID.MiningHelmet)
+                        return true;
+                }
+                
+                // 2. Если каски нет в аксессуарах, проверяем слот шлема брони
+                // Но только если в слотах аксессуаров НЕТ других шлемов
+                bool hasAccessoryHelmet = false;
+                for (int i = 3; i < Player.armor.Length; i++)
+                {
+                    if (Player.armor[i] != null && Player.armor[i].headSlot >= 0)
+                    {
+                        // В аксессуарах есть предмет с визуальным отображением головы
+                        hasAccessoryHelmet = true;
+                        break;
+                    }
+                }
+                
+                // Если в аксессуарах нет шлема, проверяем каску в слоте брони
+                if (!hasAccessoryHelmet && 
+                    Player.armor[0] != null && 
+                    Player.armor[0].type == ItemID.MiningHelmet)
+                {
+                    return true;
+                }
+                
+                return false;
+            }
+        }
 
         public override void PostHurt(Player.HurtInfo info)
         {
@@ -505,7 +537,10 @@ namespace MinerHelmetFlashlight
         private void ApplyDynamicLighting(Vector2 flashlightPosition)
         {
             float beamLength = EffectiveBeamLength;
-
+            
+            // Получаем цвет из конфига один раз, вне цикла
+            Vector3 configColor = ModContent.GetInstance<FlashlightConfig>().LightColor;
+            
             const int samples = 28;
             for (int i = 0; i <= samples; i++)
             {
@@ -513,11 +548,13 @@ namespace MinerHelmetFlashlight
                 Vector2 samplePos = flashlightPosition + BeamDirection * (beamLength * t);
                 float baseIntensity = MathHelper.Lerp(1.15f, 0.1f, t);
                 float intensity = baseIntensity * LightIntensity * FlickerIntensity;
+                
+                // Используем цвет из конфига вместо захардкоженных значений
                 Lighting.AddLight(
                     samplePos,
-                    1.0f * intensity,
-                    0.95f * intensity,
-                    0.8f * intensity
+                    configColor.X * intensity, // R
+                    configColor.Y * intensity, // G
+                    configColor.Z * intensity  // B
                 );
             }
         }
