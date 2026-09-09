@@ -80,7 +80,7 @@ namespace MinerHelmetFlashlight
                 _debugLogTimer = 0;
                 Main.NewText(
                     $"headPos.Y={Player.headPosition.Y:F1}  beamOrigin.Y={flashlightPosition.Y:F1}  " +
-                    $"pos.Y={Player.position.Y:F1}  gfxOffY={Player.gfxOffY:F1}  mount={Player.mount.Active}",
+                    $"pos.Y={Player.position.Y:F1}  gfxOffY={Player.gfxOffY:F1}  mount={Player.mount.Active}  fullRotation={Player.fullRotation:F2}",
                     Color.Yellow
                 );
             }
@@ -150,24 +150,83 @@ namespace MinerHelmetFlashlight
             }
 
             // gfxOffY — визуальное сглаживающее смещение спрайта.
-            // Оно УЖЕ представляет разницу между визуальной и логической позицией,
-            // поэтому его нужно ДОБАВЛЯТЬ, а не вычитать.
+            // Оно уже представляет разницу между визуальной и логической позицией,
+            // поэтому добавляем, а не вычитаем (см. предыдущий фикс).
             float gfxOffY = Player.gfxOffY;
 
             if (Player.mount.Active)
             {
+                if (Player.mount.Type == MountID.Minecart || Player.mount.Type == MountID.MinecartMech)
+                {
+                    return GetMinecartHeadPosition(gfxOffY);
+                }
+
+                // Прочие маунты (УФО, единорог, бур и т.п.) — общая формула,
+                // без специфичных для вагонетки поправок.
                 Vector2 center = Player.MountedCenter;
-                return center + new Vector2(
-                    Player.direction * 6f,
-                    -14f + gfxOffY  // ← ИСПРАВЛЕНО: было -gfxOffY, стало +gfxOffY
-                );
+                Vector2 localHeadOffset = new Vector2(Player.direction * 6f, -14f + gfxOffY);
+
+                if (Player.fullRotation != 0f)
+                {
+                    float fc = (float)Math.Cos(Player.fullRotation);
+                    float fs = (float)Math.Sin(Player.fullRotation);
+                    localHeadOffset = new Vector2(
+                        localHeadOffset.X * fc - localHeadOffset.Y * fs,
+                        localHeadOffset.X * fs + localHeadOffset.Y * fc
+                    );
+                }
+
+                return center + localHeadOffset;
             }
 
             Vector2 defaultCenter = Player.position + new Vector2(Player.width / 2f, Player.height / 2f);
             return defaultCenter + new Vector2(
                 Player.direction * 6f,
-                -Player.height / 2f + 8f + gfxOffY  // ← ИСПРАВЛЕНО: было -gfxOffY, стало +gfxOffY
+                -Player.height / 2f + 8f + gfxOffY
             );
+        }
+
+        /// <summary>
+        /// Отдельная формула позиционирования головы для вагонетки.
+        /// Раскладываем смещение на две ОСМЫСЛЕННЫЕ, независимые компоненты:
+        ///   AlongRail — вдоль направления рельсов (вперёд по ходу вагонетки)
+        ///   AcrossRail — поперёк рельсов (вверх от сиденья к голове)
+        /// вместо одного смешанного вектора (direction*6, -14). Так их можно
+        /// откалибровать по отдельности: по вашим наблюдениям на подъёме и
+        /// спуске ошибка ведёт себя по-разному (то дальше, то ближе), а
+        /// единственной универсальной константой такое не описать — тут два
+        /// независимых неизвестных, а не одно.
+        ///
+        /// ТЕКУЩИЕ ЗНАЧЕНИЯ — ПРИБЛИЗИТЕЛЬНЫЕ, требуют калибровки по вашим
+        /// данным (см. чат).
+        /// </summary>
+        private Vector2 GetMinecartHeadPosition(float gfxOffY)
+        {
+            const float AlongRail = 6f;   // вперёд по ходу движения вагонетки
+            const float AcrossRail = -14f; // от сиденья вверх к голове
+
+            Vector2 center = Player.MountedCenter;
+
+            float fc = (float)Math.Cos(Player.fullRotation);
+            float fs = (float)Math.Sin(Player.fullRotation);
+
+            float forward = AlongRail * Player.direction;
+            float across = AcrossRail + gfxOffY;
+
+            Vector2 localHeadOffset = new Vector2(
+                forward * fc - across * fs,
+                forward * fs + across * fc
+            );
+
+            // Простой мировой сдвиг (не локальный, не поворачивается вместе
+            // с вагонеткой) — подвинуть луч на несколько пикселей на экране.
+            // Подберите значения по глазу; отрицательные = влево/вверх.
+            const float WorldOffsetX = -14f;
+            const float WorldOffsetY = 5f;
+            localHeadOffset.X += WorldOffsetX;
+            localHeadOffset.Y += WorldOffsetY;
+
+            return center + localHeadOffset;
         }
 
         public Vector2 GetFlashlightWorldPosition()
