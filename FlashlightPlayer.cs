@@ -10,12 +10,12 @@ namespace MinerHelmetFlashlight
     {
         public Vector2 BeamDirection = Vector2.UnitX;
         public float HeadRotation = 0f;
-        public float EffectiveBeamLength = 0f;
+        public float EffectiveBeamLength = 0f; // длина луча, обрезанная первым твёрдым блоком на пути
 
         private const float FlashlightLocalX = 1f;
         private const float FlashlightLocalY = -4f;
-
         private float _dustSpawnTimer;
+        private int _debugLogTimer;
         private Vector2 _previousFlashlightPosition;
         private float _dashCooldown;
         private bool _isDashing;
@@ -53,6 +53,18 @@ namespace MinerHelmetFlashlight
                 direction.X = -direction.X;
             }
 
+            // Player.fullRotation — наклон ВСЕГО тела (например, на вагонетке)
+            // Применяем его отдельным поворотом к готовому вектору
+            if (Player.fullRotation != 0f)
+            {
+                float fc = (float)Math.Cos(Player.fullRotation);
+                float fs = (float)Math.Sin(Player.fullRotation);
+                direction = new Vector2(
+                    direction.X * fc - direction.Y * fs,
+                    direction.X * fs + direction.Y * fc
+                );
+            }
+
             if (direction.LengthSquared() > 0.0001f)
                 direction.Normalize();
 
@@ -60,8 +72,23 @@ namespace MinerHelmetFlashlight
 
             Vector2 flashlightPosition = GetFlashlightWorldPosition();
 
+            // ВРЕМЕННАЯ ОТЛАДКА: вывод в чат раз в секунду (60 тиков логики).
+            // Уберите этот блок после диагностики.
+            _debugLogTimer++;
+            if (_debugLogTimer >= 60)
+            {
+                _debugLogTimer = 0;
+                Main.NewText(
+                    $"headPos.Y={Player.headPosition.Y:F1}  beamOrigin.Y={flashlightPosition.Y:F1}  " +
+                    $"pos.Y={Player.position.Y:F1}  gfxOffY={Player.gfxOffY:F1}  mount={Player.mount.Active}",
+                    Color.Yellow
+                );
+            }
+
+            // Raycasting: вычисляем реальную длину луча до первого блока
             EffectiveBeamLength = RaycastBeamLength(flashlightPosition, BeamDirection, BeamLength);
 
+            // Обнаружение рывка
             if (_previousFlashlightPosition != Vector2.Zero)
             {
                 float movementDistance = Vector2.Distance(flashlightPosition, _previousFlashlightPosition);
@@ -122,29 +149,32 @@ namespace MinerHelmetFlashlight
                 return Player.headPosition;
             }
 
+            // gfxOffY — визуальное сглаживающее смещение спрайта.
+            // Оно УЖЕ представляет разницу между визуальной и логической позицией,
+            // поэтому его нужно ДОБАВЛЯТЬ, а не вычитать.
+            float gfxOffY = Player.gfxOffY;
+
             if (Player.mount.Active)
             {
                 Vector2 center = Player.MountedCenter;
-                Vector2 headOffset = new Vector2(
+                return center + new Vector2(
                     Player.direction * 6f,
-                    -14f - Player.gfxOffY
+                    -14f + gfxOffY  // ← ИСПРАВЛЕНО: было -gfxOffY, стало +gfxOffY
                 );
-                return center + headOffset;
             }
 
             Vector2 defaultCenter = Player.position + new Vector2(Player.width / 2f, Player.height / 2f);
-            Vector2 defaultOffset = new Vector2(
+            return defaultCenter + new Vector2(
                 Player.direction * 6f,
-                -Player.height / 2f + 8f - Player.gfxOffY
+                -Player.height / 2f + 8f + gfxOffY  // ← ИСПРАВЛЕНО: было -gfxOffY, стало +gfxOffY
             );
-            return defaultCenter + defaultOffset;
         }
 
         public Vector2 GetFlashlightWorldPosition()
         {
             Vector2 headPos = GetHeadWorldPosition();
-            float localX = FlashlightLocalX;
 
+            float localX = FlashlightLocalX;
             if (Player.direction < 0)
             {
                 localX = -localX;
@@ -156,6 +186,18 @@ namespace MinerHelmetFlashlight
             float rotatedX = localX * cos - FlashlightLocalY * sin;
             float rotatedY = localX * sin + FlashlightLocalY * cos;
 
+            // Применяем fullRotation (наклон тела на вагонетке)
+            if (Player.fullRotation != 0f)
+            {
+                float fc = (float)Math.Cos(Player.fullRotation);
+                float fs = (float)Math.Sin(Player.fullRotation);
+                float newX = rotatedX * fc - rotatedY * fs;
+                float newY = rotatedX * fs + rotatedY * fc;
+                rotatedX = newX;
+                rotatedY = newY;
+            }
+
+            // Коррекция резкого взгляда вниз
             float angleDegrees = HeadRotation * (180f / (float)Math.PI);
             float effectiveAngle = angleDegrees * Player.direction;
 
@@ -172,6 +214,10 @@ namespace MinerHelmetFlashlight
             return headPos + new Vector2(rotatedX, rotatedY);
         }
 
+        /// <summary>
+        /// Тайл блокирует луч только если на нём есть активный полноценно твёрдый блок.
+        /// Платформы и жидкость НЕ блокируют.
+        /// </summary>
         private bool IsTileBlocking(int tileX, int tileY)
         {
             Tile tile = Main.tile[tileX, tileY];
